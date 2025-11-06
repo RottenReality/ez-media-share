@@ -1,36 +1,53 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, File, UploadFile, Form, Depends
 from app.schemas import PostResponse
+from app.db import Post, create_db_and_tables, get_async_session
+from sqlalchemy.ext.asyncio import AsyncSession
+from contextlib import asynccontextmanager
+from sqlalchemy import select
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await create_db_and_tables()
+    yield
 
 
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 
-text_posts = {
-    1: {"title": "New Post", "content": "cool test post"},
-    2: {"title": "Testing Setup", "content": "Just verifying the basic installation works as expected."},
-    3: {"title": "Performance Check", "content": "A slightly longer piece of content to test longer strings in the database storage."},
-    4: {"title": "Feature X Integration", "content": "This post is about a potential new feature being prototyped."},
-    5: {"title": "Database Connect", "content": "Confirming SQLAlchemy connection is active and running."},
-    6: {"title": "A Quick Note", "content": "Short message for quick POST/GET validation."},
-    7: {"title": "Deployment Prep", "content": "Preparing the service for initial deployment readiness checks."},
-    8: {"title": "Schema Validation", "content": "Testing different title/content lengths to ensure Pydantic schemas hold up."},
-    9: {"title": "Concurrency Test", "content": "Simulating concurrent requests to see how the API handles load."},
-    10: {"title": "Final Test Post", "content": "This should be the last one required for initial endpoint verification."}
-}
+@app.post("/upload")
+async def upload_file(
+    file: UploadFile = File(...),
+    caption: str = Form(""),
+    session: AsyncSession = Depends(get_async_session)
+):
+    post = Post(
+        caption=caption,
+        url="dummyurl",
+        file_type="photo",
+        file_name="dummyname",
+    )
+    session.add(post)
+    await session.commit()
+    await session.refresh(post)
+    return post
 
-@app.get("/posts")
-def get_all_posts(limit: int = None):
-    if limit and limit < len(text_posts):
-        return list(text_posts.values())[:limit]
-    return text_posts
+@app.get("/feed")
+async def get_feed(
+    session: AsyncSession = Depends(get_async_session)
+):
+    result = await session.execute(select(Post).order_by(Post.created_at.desc()))
+    posts = [row[0] for row in result.all()]
 
-@app.post("/posts/{id}")
-def get_post(id: int) -> PostResponse:
-    if id not in text_posts:
-        raise HTTPException(status_code=404, detail="Post not found")
-    return text_posts.get(id)
-
-@app.post("/posts")
-def create_post(post: PostResponse) -> PostResponse:
-    new_post = {"title": post.title, "content": post.content}
-    text_posts[max(text_posts.keys()) + 1] = new_post
-    return new_post
+    posts_data = []
+    for post in posts:
+        posts_data.append(
+            {
+                "id":str(post.id),
+                "caption":post.caption,
+                "url":post.url,
+                "file_type":post.file_type,
+                "file_name":post.file_name,
+                "created_at":post.created_at.isoformat()
+            }
+        )
+    
+    return {"posts":posts_data}
